@@ -14,6 +14,59 @@ export function useDrawingManager(
   const circlesRef = useRef<google.maps.Circle[]>([]);
   const polygonRef = useRef<google.maps.Polygon[]>([]);
 
+  // Helper function to geocode and update circle name
+  const updateCircleName = (circle: google.maps.Circle) => {
+    const center = circle.getCenter();
+    const geocoder = new google.maps.Geocoder();
+
+    if (center) {
+      geocoder.geocode({ location: center }, (results, status) => {
+        if (status === "OK" && results && results[0]) {
+          const address = results[0].formatted_address;
+          (circle as any).customName = address;
+        } else {
+          (circle as any).customName = "Unknown Location";
+        }
+      });
+    } else {
+      (circle as any).customName = "Unknown Location";
+    }
+  };
+
+  // Helper function to geocode and update polygon name
+  const updatePolygonName = (polygon: google.maps.Polygon) => {
+    const path = polygon.getPath();
+    const geocoder = new google.maps.Geocoder();
+
+    if (path && path.getLength() > 0) {
+      // Get the center point of the polygon by averaging all vertices
+      let latSum = 0;
+      let lngSum = 0;
+      const pathLength = path.getLength();
+
+      for (let i = 0; i < pathLength; i++) {
+        const vertex = path.getAt(i);
+        latSum += vertex.lat();
+        lngSum += vertex.lng();
+      }
+
+      const centerLat = latSum / pathLength;
+      const centerLng = lngSum / pathLength;
+      const center = new google.maps.LatLng(centerLat, centerLng);
+
+      geocoder.geocode({ location: center }, (results, status) => {
+        if (status === "OK" && results && results[0]) {
+          const address = results[0].formatted_address;
+          (polygon as any).customName = address;
+        } else {
+          (polygon as any).customName = "Unknown Location";
+        }
+      });
+    } else {
+      (polygon as any).customName = "Unknown Location";
+    }
+  };
+
   useEffect(() => {
     if (!map || !drawing) return;
 
@@ -33,37 +86,31 @@ export function useDrawingManager(
       },
       circleOptions: {
         editable: true,
+        draggable: true,
+      },
+      polygonOptions: {
+        editable: true,
+        draggable: true,
       },
     });
-
-    // google.maps.event.addListener(newDrawingManager, 'circlecomplete', (circle: google.maps.Circle) => {
-    //     circlesRef.current.push(circle);
-    //     // No setCircles here, so no re-render triggered
-    // });
 
     google.maps.event.addListener(
       newDrawingManager,
       "circlecomplete",
       (circle: google.maps.Circle) => {
-        const center = circle.getCenter();
-        const geocoder = new google.maps.Geocoder();
+        // Initial geocoding for the circle
+        updateCircleName(circle);
+        circlesRef.current.push(circle);
 
-        if (center) {
-          geocoder.geocode({ location: center }, (results, status) => {
-            if (status === "OK" && results && results[0]) {
-              const address = results[0].formatted_address;
-              // Attach a customName property to the circle
-              (circle as any).customName = address;
-            } else {
-              (circle as any).customName = "Unknown Location";
-            }
-            // Add circle after geocoding completes
-            circlesRef.current.push(circle);
-          });
-        } else {
-          (circle as any).customName = "Unknown Location";
-          circlesRef.current.push(circle);
-        }
+        // Listen for center changes (when circle is dragged)
+        google.maps.event.addListener(circle, "center_changed", () => {
+          updateCircleName(circle);
+        });
+
+        // Listen for radius changes
+        google.maps.event.addListener(circle, "radius_changed", () => {
+          updateCircleName(circle);
+        });
       }
     );
 
@@ -71,45 +118,30 @@ export function useDrawingManager(
       newDrawingManager,
       "polygoncomplete",
       (polygon: google.maps.Polygon) => {
+        // Initial geocoding for the polygon
+        updatePolygonName(polygon);
+        polygonRef.current.push(polygon);
+
+        // Listen for path changes (when polygon is edited)
         const path = polygon.getPath();
-        const geocoder = new google.maps.Geocoder();
-        debugger;
-
-        if (path && path.getLength() > 0) {
-          // Get the center point of the polygon by averaging all vertices
-          let latSum = 0;
-          let lngSum = 0;
-          const pathLength = path.getLength();
-
-          for (let i = 0; i < pathLength; i++) {
-            const vertex = path.getAt(i);
-            console.log(
-              `l${i + 1} : lat : ${vertex.lat()} lng : ${vertex.lng()}`
-            );
-
-            latSum += vertex.lat();
-            lngSum += vertex.lng();
-          }
-
-          const centerLat = latSum / pathLength;
-          const centerLng = lngSum / pathLength;
-          const center = new google.maps.LatLng(centerLat, centerLng);
-
-          geocoder.geocode({ location: center }, (results, status) => {
-            if (status === "OK" && results && results[0]) {
-              const address = results[0].formatted_address;
-              // Attach a customName property to the polygon
-              (polygon as any).customName = address;
-            } else {
-              (polygon as any).customName = "Unknown Location";
-            }
-            // Add polygon after geocoding completes
-            polygonRef.current.push(polygon);
+        if (path) {
+          google.maps.event.addListener(path, "set_at", () => {
+            updatePolygonName(polygon);
           });
-        } else {
-          (polygon as any).customName = "Unknown Location";
-          polygonRef.current.push(polygon);
+
+          google.maps.event.addListener(path, "insert_at", () => {
+            updatePolygonName(polygon);
+          });
+
+          google.maps.event.addListener(path, "remove_at", () => {
+            updatePolygonName(polygon);
+          });
         }
+
+        // Listen for polygon drag events
+        google.maps.event.addListener(polygon, "dragend", () => {
+          updatePolygonName(polygon);
+        });
       }
     );
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { APIProvider, InfoWindow, Map } from "@vis.gl/react-google-maps";
+import { APIProvider, Map } from "@vis.gl/react-google-maps";
 import { useLazyGetRouteInformationQuery } from "./services/map";
 import { ClusteredTruckMarkers } from "./components/ClusterTruckMarkers";
 import TruckFilter from "./components/TruckFilter";
@@ -12,10 +12,6 @@ import {
   type PaletteMode,
 } from "@mui/material/styles";
 import { CssBaseline } from "@mui/material";
-import { loadCastlesGeojson, type CastlesGeojson } from "./helpers/castles";
-import type { Feature, Point } from "geojson";
-import ClusteredMarkers from "./components/ClusteredMarkers";
-import { InfoWindowContent } from "./components/InfoWindowContent";
 import "./App.css";
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -48,23 +44,6 @@ const App = () => {
   const [getRouteInformation] = useLazyGetRouteInformationQuery();
 
   const [routeData, setRouteData] = useState<Truck[]>([]);
-
-  const [geojson, setGeojson] = useState<CastlesGeojson | null>(null);
-  const [numClusters, setNumClusters] = useState(0);
-
-  useEffect(() => {
-    void loadCastlesGeojson().then((data) => setGeojson(data));
-  }, []);
-
-  const [infowindowData, setInfowindowData] = useState<{
-    anchor: google.maps.marker.AdvancedMarkerElement;
-    features: Feature<Point>[];
-  } | null>(null);
-
-  const handleInfoWindowClose = useCallback(
-    () => setInfowindowData(null),
-    [setInfowindowData]
-  );
 
   const muiTheme = createTheme({
     palette: {
@@ -241,22 +220,6 @@ const App = () => {
               <ClusteredTruckMarkers trucks={routeData} />
             ) : (
               ""
-            )}
-            {/* {geojson && (
-              <ClusteredMarkers
-                geojson={geojson}
-                setNumClusters={setNumClusters}
-                setInfowindowData={setInfowindowData}
-              />
-            )} */}
-
-            {infowindowData && (
-              <InfoWindow
-                onCloseClick={handleInfoWindowClose}
-                anchor={infowindowData.anchor}
-              >
-                <InfoWindowContent features={infowindowData.features} />
-              </InfoWindow>
             )}
           </Map>
         </APIProvider>

@@ -1,90 +1,108 @@
-import { InfoWindow, useMap } from "@vis.gl/react-google-maps";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { type Marker, MarkerClusterer } from "@googlemaps/markerclusterer";
+import { InfoWindow } from "@vis.gl/react-google-maps";
+import React, { useCallback, useMemo, useState } from "react";
 import { type Truck } from "../../types/truck";
 import { TruckMarker } from "../TruckMarker";
+import { FeaturesClusterMarker } from "../FeaturesClusterMarker";
+import { useSupercluster } from "../hooks/useSupercluster";
+import type { FeatureCollection, Point } from "geojson";
+import type Supercluster from "supercluster";
+import type { ClusterProperties } from "supercluster";
 
 export type ClusteredTruckMarkersProps = {
   trucks: Truck[];
 };
 
+const superclusterOptions: Supercluster.Options<
+  { truck: Truck },
+  ClusterProperties
+> = {
+  extent: 256,
+  radius: 80,
+  maxZoom: 12,
+};
+
 /**
  * The ClusteredTruckMarkers component is responsible for integrating the
- * markers with the markerclusterer.
+ * markers with the markerclusterer using Supercluster with castle icons.
  */
 export const ClusteredTruckMarkers = ({
   trucks,
 }: ClusteredTruckMarkersProps) => {
-  const [markers, setMarkers] = useState<{ [key: string]: Marker }>({});
-  const [selectedTreeKey, setSelectedTreeKey] = useState<string | null>(null);
-  const [geojson, setGeojson] = useState<CastlesGeojson | null>(null);
+  const [selectedTruckKey, setSelectedTruckKey] = useState<string | null>(null);
 
-  const selectedTree = useMemo(
-    () =>
-      trucks && selectedTreeKey
-        ? trucks.find((t) => t.key === selectedTreeKey)!
-        : null,
-    [trucks, selectedTreeKey]
+  // Convert trucks to GeoJSON format for Supercluster
+  const geojson: FeatureCollection<Point, { truck: Truck }> = useMemo(
+    () => ({
+      type: "FeatureCollection",
+      features: trucks.map((truck) => ({
+        type: "Feature",
+        id: truck.key,
+        geometry: {
+          type: "Point",
+          coordinates: [truck.position.lng, truck.position.lat],
+        },
+        properties: {
+          truck,
+        },
+      })),
+    }),
+    [trucks]
   );
 
-  // create the markerClusterer once the map is available and update it when
-  // the markers are changed
-  const map = useMap();
-  const clusterer = useMemo(() => {
-    if (!map) return null;
+  const { clusters } = useSupercluster(geojson, superclusterOptions);
 
-    return new MarkerClusterer({ map });
-  }, [map]);
-
-  useEffect(() => {
-    if (!clusterer) return;
-
-    clusterer.clearMarkers();
-    clusterer.addMarkers(Object.values(markers));
-  }, [clusterer, markers]);
-
-  // this callback will effectively get passsed as ref to the markers to keep
-  // tracks of markers currently on the map
-  const setMarkerRef = useCallback((marker: Marker | null, key: string) => {
-    setMarkers((markers) => {
-      if ((marker && markers[key]) || (!marker && !markers[key]))
-        return markers;
-
-      if (marker) {
-        return { ...markers, [key]: marker };
-      } else {
-        const { [key]: _, ...newMarkers } = markers;
-
-        return newMarkers;
-      }
-    });
-  }, []);
+  const selectedTruck = useMemo(
+    () =>
+      trucks && selectedTruckKey
+        ? trucks.find((t) => t.key === selectedTruckKey)!
+        : null,
+    [trucks, selectedTruckKey]
+  );
 
   const handleInfoWindowClose = useCallback(() => {
-    setSelectedTreeKey(null);
+    setSelectedTruckKey(null);
   }, []);
 
-  const handleMarkerClick = useCallback((truck: Truck) => {
-    setSelectedTreeKey(truck.key);
+  const handleTruckMarkerClick = useCallback((truck: Truck) => {
+    setSelectedTruckKey(truck.key);
+  }, []);
+
+  const handleClusterClick = useCallback(() => {
+    // Optional: Add cluster click behavior if needed
   }, []);
 
   return (
     <>
-      {trucks.map((truck) => (
-        <TruckMarker
-          key={truck.key}
-          truck={truck}
-          onClick={handleMarkerClick}
-          setMarkerRef={setMarkerRef}
-        />
-      ))}
+      {clusters.map((feature) => {
+        const [lng, lat] = feature.geometry.coordinates;
+        const clusterProperties = feature.properties as ClusterProperties;
+        const isCluster: boolean = clusterProperties?.cluster;
 
-      {selectedTreeKey && (
+        return isCluster ? (
+          <FeaturesClusterMarker
+            key={feature.id}
+            clusterId={clusterProperties.cluster_id}
+            position={{ lat, lng }}
+            size={clusterProperties.point_count}
+            sizeAsText={String(clusterProperties.point_count_abbreviated)}
+            onMarkerClick={handleClusterClick}
+          />
+        ) : (
+          <TruckMarker
+            key={feature.id}
+            truck={(feature.properties as { truck: Truck }).truck}
+            onClick={handleTruckMarkerClick}
+            setMarkerRef={() => {}} // Not needed for supercluster approach
+          />
+        );
+      })}
+
+      {selectedTruckKey && selectedTruck && (
         <InfoWindow
-          anchor={markers[selectedTreeKey]}
+          position={selectedTruck.position}
           onCloseClick={handleInfoWindowClose}
         >
-          {selectedTree?.name}
+          {selectedTruck.name}
         </InfoWindow>
       )}
     </>
