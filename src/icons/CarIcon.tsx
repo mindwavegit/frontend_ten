@@ -1,0 +1,58 @@
+import React from "react";
+
+export const TruckIcon = () => (
+  <svg
+    width="90"
+    height="90"
+    viewBox="0 0 200 100"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <rect
+      x="10"
+      y="30"
+      width="40"
+      height="40"
+      rx="5"
+      fill="#e74c3c"
+      stroke="#2c3e50"
+      strokeWidth="2"
+    />
+    <rect
+      x="50"
+      y="35"
+      width="20"
+      height="30"
+      rx="3"
+      fill="#c0392b"
+      stroke="#2c3e50"
+      strokeWidth="2"
+    />
+    <rect x="68" y="48" width="4" height="6" fill="#7f8c8d" />
+
+    <rect
+      x="72"
+      y="30"
+      width="100"
+      height="40"
+      rx="8"
+      fill="#ecf0f1"
+      stroke="#2c3e50"
+      strokeWidth="2"
+    />
+
+    <rect x="11" y="34" width="6" height="4" rx="1" fill="#f1c40f" />
+    <rect x="11" y="62" width="6" height="4" rx="1" fill="#f1c40f" />
+
+    <line x1="90" y1="30" x2="90" y2="70" stroke="#bdc3c7" strokeWidth="1" />
+    <line x1="110" y1="30" x2="110" y2="70" stroke="#bdc3c7" strokeWidth="1" />
+    <line x1="130" y1="30" x2="130" y2="70" stroke="#bdc3c7" strokeWidth="1" />
+    <line x1="150" y1="30" x2="150" y2="70" stroke="#bdc3c7" strokeWidth="1" />
+
+    <path
+      d="M10 30 L10 70 L50 70 L50 30 Z M72 30 L72 70 L172 70 L172 30 Z"
+      stroke="#2c3e50"
+      strokeWidth="1"
+    />
+  </svg>
+);
