@@ -662,14 +662,6 @@ const Geofences = () => {
           </Typography>
           <Box sx={{ display: "flex", gap: 1 }}>
             <Button
-              variant="outlined"
-              color="primary"
-              startIcon={<MyLocationIcon />}
-              onClick={handleGeolocation}
-            >
-              My Location
-            </Button>
-            <Button
               variant="contained"
               color="primary"
               startIcon={<AddIcon />}
@@ -838,15 +830,6 @@ const Geofences = () => {
                 size="small"
                 sx={{ flex: 1 }}
               />
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={handleLocateMe}
-                startIcon={<LocationOnIcon />}
-                sx={{ whiteSpace: "nowrap" }}
-              >
-                Locate Me
-              </Button>
             </Box>
             {errors.location && (
               <Typography
