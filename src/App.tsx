@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { APIProvider, Map } from "@vis.gl/react-google-maps";
 import { useLazyGetRouteInformationQuery } from "./services/map";
 import { ClusteredTruckMarkers } from "./components/ClusterTruckMarkers";
@@ -13,6 +14,8 @@ import {
 } from "@mui/material/styles";
 import { CssBaseline } from "@mui/material";
 import "./App.css";
+import Features from "./pages/Features";
+import Geofences from "./pages/Geofences";
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -32,198 +35,21 @@ interface ApiResponseItem {
 }
 
 const App = () => {
-  const countRef = useRef(1);
-  const fetchedRecordsCount = useRef(0);
-  const [availableRecordsCount, setAvailableRecordsCount] = useState(0);
-  const [filtersData, setFiltersData] = useState<FilterState>({});
-  const timeoutRef = useRef<number | null>(null);
-  const [isTrackLiveEnabled, setIsTrackLiveEnabled] = useState(false);
-  const [isWarehouseMode, setIsWarehouseMode] = useState(false);
-  const [theme, setTheme] = useState<PaletteMode>("light");
-
-  const [getRouteInformation] = useLazyGetRouteInformationQuery();
-
-  const [routeData, setRouteData] = useState<Truck[]>([]);
-
   const muiTheme = createTheme({
     palette: {
-      mode: theme,
+      mode: "light",
     },
   });
-
-  const mapOptions = {
-    mapId: theme === "dark" ? "7a9e2ebecd32a903" : "49ae42fed52588c3",
-    defaultCenter: { lat: 43.64, lng: -79.41 },
-    defaultZoom: 4,
-    gestureHandling: "greedy",
-    disableDefaultUI: true,
-  };
-
-  const fetchLocationData = useCallback(
-    async ({
-      filters,
-      isNewSearch = false,
-    }: {
-      filters: FilterState;
-      isNewSearch?: boolean;
-    }) => {
-      try {
-        const response = await getRouteInformation({
-          page: countRef.current,
-          limit: 1500,
-          searchParams: filters,
-        });
-        if (response.error) {
-          return;
-        } else if (response.data) {
-          const transformedData: Truck[] = response.data.data.map(
-            (item: ApiResponseItem) => {
-              return {
-                key: item.id,
-                name: item.name,
-                category: item.status,
-                position: {
-                  lat: item.originLat,
-                  lng: item.originLng,
-                },
-              };
-            }
-          );
-
-          // For new searches (Submit), replace data. For pagination, append data.
-          if (isNewSearch) {
-            setRouteData(transformedData);
-          } else {
-            setRouteData((prev) => [...prev, ...transformedData]);
-          }
-
-          setAvailableRecordsCount(response.data.total);
-          fetchedRecordsCount.current += 1500;
-          countRef.current += 1;
-        }
-      } catch (err) {
-        console.log(err);
-      }
-    },
-    [getRouteInformation]
-  );
-
-  useEffect(() => {
-    // Only schedule if we haven't fetched everything AND tracking is not enabled
-    console.log({
-      fetchedRecordsCount,
-      availableRecordsCount,
-      isTrackLiveEnabled,
-    });
-
-    if (
-      fetchedRecordsCount.current < 10000 &&
-      Object.keys(filtersData).length &&
-      !isTrackLiveEnabled // Don't schedule if tracking is enabled
-    ) {
-      timeoutRef.current = window.setTimeout(() => {
-        fetchLocationData({ filters: filtersData });
-      }, 2000);
-    }
-
-    // Cleanup previous timeout
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-    };
-  }, [
-    routeData,
-    availableRecordsCount,
-    fetchLocationData,
-    filtersData,
-    isTrackLiveEnabled,
-  ]);
-
-  const onSubmit = useCallback(
-    (state: FilterState, isFetchStopped: boolean) => {
-      // Clear any existing timeout first
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-
-      // Reset warehouse mode when doing other operations
-      if (isWarehouseMode) {
-        setIsWarehouseMode(false);
-      }
-
-      if (!isFetchStopped) {
-        setIsTrackLiveEnabled(false);
-        // For normal submit/clear, reset counters and fetch new data
-        setAvailableRecordsCount(0);
-        fetchedRecordsCount.current = 0;
-        countRef.current = 1;
-        setFiltersData(state);
-        fetchLocationData({ filters: state, isNewSearch: true });
-      }
-
-      if (isFetchStopped) {
-        // For live tracking, clear everything and enable tracking
-        setRouteData([]);
-        setAvailableRecordsCount(0);
-        fetchedRecordsCount.current = 0;
-        countRef.current = 1;
-        setFiltersData({});
-        setTimeout(() => {
-          setIsTrackLiveEnabled(true);
-        }, 2000);
-      }
-    },
-    [fetchLocationData, isWarehouseMode]
-  );
-
-  const handleWarehouseMode = useCallback(() => {
-    // Clear any existing timeout first
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-
-    // Clear all existing marker data
-    setRouteData([]);
-    setAvailableRecordsCount(0);
-    fetchedRecordsCount.current = 0;
-    countRef.current = 1;
-    setFiltersData({});
-
-    // Disable live tracking and enable warehouse mode
-    setIsTrackLiveEnabled(false);
-    setIsWarehouseMode(true);
-  }, []);
-
-  const handleThemeChange = useCallback((value: boolean) => {
-    setTheme(value ? "dark" : "light");
-  }, []);
 
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
-      <div style={{ height: "700px" }}>
-        <APIProvider apiKey={API_KEY} libraries={["marker"]}>
-          <TruckFilter
-            onSubmit={onSubmit}
-            isTrackingActive={isTrackLiveEnabled}
-            onThemeChange={handleThemeChange}
-            onWarehouseMode={handleWarehouseMode}
-          />
-          <Map {...mapOptions} className={"custom-marker-clustering-map"}>
-            {isTrackLiveEnabled && !isWarehouseMode ? <MyMapContent /> : ""}
-            {isWarehouseMode ? <WarehouseContent /> : ""}
-            {!isTrackLiveEnabled && !isWarehouseMode ? (
-              <ClusteredTruckMarkers trucks={routeData} />
-            ) : (
-              ""
-            )}
-          </Map>
-        </APIProvider>
-      </div>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Features />} />
+          <Route path="/geofence" element={<Geofences />} />
+        </Routes>
+      </Router>
     </ThemeProvider>
   );
 };
