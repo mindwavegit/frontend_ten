@@ -23,9 +23,11 @@ import {
   LocationOn as LocationOnIcon,
   MyLocation as MyLocationIcon,
 } from "@mui/icons-material";
+import { Easing, Tween, update } from "@tweenjs/tween.js";
+
 import TextInputField from "../../components/Form/TextField";
-import React, { useState, useCallback, useRef } from "react";
-import { APIProvider, Map } from "@vis.gl/react-google-maps";
+import React, { useState, useCallback } from "react";
+import { APIProvider, Map, useMap } from "@vis.gl/react-google-maps";
 import { useDrawingManager } from "../../components/hooks/useDrawingManager";
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
@@ -74,12 +76,6 @@ const Geofences = () => {
   // State for storing saved geofences
   const [geofences, setGeofences] = useState<GeofenceData[]>([]);
 
-  // Map instance state
-  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
-  const [isMapLoaded, setIsMapLoaded] = useState(false);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentShape, setCurrentShape] = useState<{
@@ -96,7 +92,6 @@ const Geofences = () => {
       lng: "",
       address: "",
     },
-    assignEquipment: "single",
     shape: "circle",
     group: "",
   });
@@ -115,92 +110,21 @@ const Geofences = () => {
     disableDefaultUI: true,
   });
 
-  // Function to get the map instance from Google Maps
-  const getMapInstance = (): google.maps.Map | null => {
-    // Try to get from our stored reference first
-    if (mapRef.current) {
-      return mapRef.current;
-    }
-
-    // Try to find the map in the DOM
-    const mapElement = document.querySelector(
-      '[data-testid="map"]'
-    ) as HTMLElement;
-    if (mapElement && (mapElement as any).map) {
-      const foundMap = (mapElement as any).map as google.maps.Map;
-      mapRef.current = foundMap;
-      return foundMap;
-    }
-
-    // Try to find by gm-style class
-    const gmStyleElement = document.querySelector(".gm-style");
-    if (gmStyleElement && gmStyleElement.parentElement) {
-      const mapDiv = gmStyleElement.parentElement;
-      if ((mapDiv as any).map) {
-        const foundMap = (mapDiv as any).map as google.maps.Map;
-        mapRef.current = foundMap;
-        return foundMap;
-      }
-    }
-
-    return null;
-  };
-
-  // Callback to capture map instance and re-attach existing geofences
-  const handleMapLoad = useCallback(
-    (map: google.maps.Map) => {
-      mapRef.current = map;
-      setMapInstance(map);
-      setIsMapLoaded(true);
-
-      // Re-attach all existing geofences to the new map instance
-      geofences.forEach((geofence) => {
-        if (geofence.shapeObject) {
-          geofence.shapeObject.setMap(map);
-        }
-      });
-
-      console.log("Map loaded successfully");
-    },
-    [geofences]
-  );
-
-  // Effect to ensure all geofences are attached to the current map instance
-  React.useEffect(() => {
-    const map = getMapInstance();
-    if (map && geofences.length > 0) {
-      geofences.forEach((geofence) => {
-        if (geofence.shapeObject) {
-          geofence.shapeObject.setMap(map);
-        }
-      });
-    }
-  }, [geofences]);
-
-  // Effect to periodically check for map instance
-  React.useEffect(() => {
-    const checkMapInstance = () => {
-      const map = getMapInstance();
-      if (map && !isMapLoaded) {
-        setMapInstance(map);
-        setIsMapLoaded(true);
-        console.log("Map instance found via periodic check");
-      }
-    };
-
-    const interval = setInterval(checkMapInstance, 500);
-
-    // Clear interval after 10 seconds
-    setTimeout(() => {
-      clearInterval(interval);
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, [isMapLoaded]);
-
   // Custom hook for drawing manager
   const MapWithDrawing = () => {
-    const { drawingManager, circlesRef, polygonRef } = useDrawingManager();
+    const { drawingManager } = useDrawingManager();
+    const map = useMap();
+    // Handle animation when animationTarget changes
+    React.useEffect(() => {
+      if (!animationTarget) return;
+
+      const { lat, lng, targetZoom } = animationTarget;
+
+      // Animate camera with TWEEN by updating map config
+      map.setCenter({ lat, lng });
+      // Clear the animation target after starting
+      setAnimationTarget(null);
+    }, [animationTarget]);
 
     // Handle new shapes being drawn
     React.useEffect(() => {
@@ -435,15 +359,14 @@ const Geofences = () => {
   const handleSave = useCallback(() => {
     if (!validateForm()) return;
 
-    // If no shape is drawn, create a default circle at the specified location
+    // Use the current shape or create a default circle
     let shapeObject = currentShape?.shape;
     if (
       !shapeObject &&
       formData.location.lat !== "" &&
-      formData.location.lng !== "" &&
-      mapInstance
+      formData.location.lng !== ""
     ) {
-      // Create a default circle
+      // Create a default circle (note: this won't be displayed without a map instance)
       const defaultCircle = new google.maps.Circle({
         center: {
           lat: formData.location.lat as number,
@@ -457,7 +380,6 @@ const Geofences = () => {
         strokeColor: "#FF0000",
         strokeOpacity: 0.8,
         strokeWeight: 2,
-        map: mapInstance,
       });
       shapeObject = defaultCircle;
     }
@@ -468,11 +390,6 @@ const Geofences = () => {
         shape: "Please draw a shape on the map or provide valid coordinates",
       }));
       return;
-    }
-
-    // Ensure the shape is attached to the current map instance
-    if (mapInstance && shapeObject) {
-      shapeObject.setMap(mapInstance);
     }
 
     const newGeofence: GeofenceData = {
@@ -492,7 +409,7 @@ const Geofences = () => {
 
     setGeofences((prev) => [...prev, newGeofence]);
     handleCloseModal();
-  }, [formData, currentShape, mapInstance]);
+  }, [formData, currentShape]);
 
   // Handle modal close
   const handleCloseModal = () => {
@@ -548,15 +465,7 @@ const Geofences = () => {
             defaultZoom: 15,
           }));
 
-          // Try to get the map instance
-          const map = getMapInstance();
-          if (map) {
-            map.panTo({ lat, lng });
-            map.setZoom(15);
-            console.log("Geolocation successful");
-          } else {
-            console.warn("Map instance not available for geolocation");
-          }
+          console.log("Geolocation successful");
         },
         (error) => {
           console.error("Error getting location:", error);
@@ -570,75 +479,52 @@ const Geofences = () => {
     }
   };
 
+  // State for animation trigger
+  const [animationTarget, setAnimationTarget] = useState<{
+    lat: number;
+    lng: number;
+    targetZoom: number;
+  } | null>(null);
+
   // Handle geofence view/navigation
   const handleGeofenceView = (geofence: GeofenceData) => {
     const { lat, lng } = geofence.location;
     const targetZoom = geofence.shape === "circle" ? 15 : 14;
 
-    // Update map configuration for future renders
-    setMapConfig((prev) => ({
-      ...prev,
-      defaultCenter: { lat, lng },
-      defaultZoom: targetZoom,
-    }));
+    // Trigger animation by setting the target
+    setAnimationTarget({ lat, lng, targetZoom });
 
-    // Try to get the map instance
-    const map = getMapInstance();
-    if (map) {
-      // Use panTo for smooth animation to the location
+    // Highlight the geofence shape temporarily
+    if (geofence.shapeObject) {
+      const originalFillColor = geofence.shapeObject.get("fillColor");
+      const originalStrokeColor = geofence.shapeObject.get("strokeColor");
+      const originalStrokeWeight = geofence.shapeObject.get("strokeWeight");
 
-      map.moveCamera({
-        center: {
-          lat,
-          lng,
-        },
+      // Highlight with different colors
+      geofence.shapeObject.setOptions({
+        fillColor: "#00FF00",
+        strokeColor: "#00AA00",
+        strokeWeight: 4,
       });
 
-      // Highlight the geofence shape temporarily
-      if (geofence.shapeObject) {
-        const originalFillColor = geofence.shapeObject.get("fillColor");
-        const originalStrokeColor = geofence.shapeObject.get("strokeColor");
-        const originalStrokeWeight = geofence.shapeObject.get("strokeWeight");
-
-        // Highlight with different colors
-        geofence.shapeObject.setOptions({
-          fillColor: "#00FF00",
-          strokeColor: "#00AA00",
-          strokeWeight: 4,
-        });
-
-        // Reset colors after 3 seconds
-        setTimeout(() => {
-          if (geofence.shapeObject) {
-            geofence.shapeObject.setOptions({
-              fillColor: originalFillColor || "#FF0000",
-              strokeColor: originalStrokeColor || "#FF0000",
-              strokeWeight: originalStrokeWeight || 2,
-            });
-          }
-        }, 3000);
-      }
-
-      console.log(
-        "Navigated to geofence:",
-        geofence.name,
-        "at",
-        geofence.location
-      );
-    } else {
-      console.warn("Map instance not available for geofence view");
-      // Fallback: Wait a bit and try again
+      // Reset colors after 3 seconds
       setTimeout(() => {
-        const retryMap = getMapInstance();
-        if (retryMap) {
-          retryMap.panTo({ lat, lng });
-          retryMap.setZoom(targetZoom);
-          console.log("Retry successful: Navigated to geofence");
-        } else {
-          console.error("Map instance still not available after retry");
+        if (geofence.shapeObject) {
+          geofence.shapeObject.setOptions({
+            fillColor: originalFillColor || "#FF0000",
+            strokeColor: originalStrokeColor || "#FF0000",
+            strokeWeight: originalStrokeWeight || 2,
+          });
         }
-      }, 1000);
+      }, 3000);
     }
+
+    console.log(
+      "Navigated to geofence:",
+      geofence.name,
+      "at",
+      geofence.location
+    );
   };
 
   // Handle geofence card click (navigate to geofence)
@@ -647,109 +533,159 @@ const Geofences = () => {
   };
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-      <Box sx={{ p: 2 }}>
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            mb: 2,
-          }}
-        >
-          <Typography fontSize="1.5rem" fontWeight="500">
+    <div style={{ height: "100vh", display: "flex" }}>
+      {/* Left Sidebar - Geofences List */}
+      <Box
+        sx={{
+          width: 350,
+          borderRight: "1px solid #ddd",
+          display: "flex",
+          flexDirection: "column",
+          backgroundColor: "#f9f9f9",
+        }}
+      >
+        {/* Header */}
+        <Box sx={{ p: 2, borderBottom: "1px solid #ddd" }}>
+          <Typography fontSize="1.5rem" fontWeight="500" gutterBottom>
             Manage Geofences
           </Typography>
-          <Box sx={{ display: "flex", gap: 1 }}>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<AddIcon />}
-              onClick={handleAddGeofence}
-            >
-              Add Geofence
-            </Button>
-          </Box>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<AddIcon />}
+            onClick={handleAddGeofence}
+            fullWidth
+          >
+            Add Geofence
+          </Button>
         </Box>
 
-        {/* Geofences List */}
-        {geofences.length > 0 && (
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Saved Geofences ({geofences.length})
-            </Typography>
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-              {geofences.map((geofence) => (
-                <Box
-                  key={geofence.id}
-                  sx={{
-                    p: 2,
-                    border: "1px solid #ddd",
-                    borderRadius: 1,
-                    backgroundColor: "#f5f5f5",
-                    minWidth: 250,
-                    cursor: "pointer",
-                    "&:hover": {
-                      backgroundColor: "#e0e0e0",
-                      borderColor: "#1976d2",
-                    },
-                  }}
-                  onClick={() => handleGeofenceClick(geofence)}
-                >
-                  <Typography variant="body2" fontWeight="bold" gutterBottom>
-                    {geofence.name}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Trailer:</strong> {geofence.trailerNumber}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Type:</strong> {geofence.shape}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Group:</strong> {geofence.group}
-                  </Typography>
-
-                  <Typography variant="body2" color="text.secondary">
-                    <strong>Location:</strong>{" "}
-                    {geofence.location.address ||
-                      `${geofence.location.lat}, ${geofence.location.lng}`}
-                  </Typography>
-                  <Box sx={{ mt: 1, display: "flex", gap: 1 }}>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      color="primary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleGeofenceView(geofence);
-                      }}
+        {/* Geofences List - Scrollable */}
+        <Box sx={{ flex: 1, overflow: "auto", p: 2 }}>
+          {geofences.length > 0 ? (
+            <>
+              <Typography variant="h6" gutterBottom>
+                Saved Geofences ({geofences.length})
+              </Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {geofences.map((geofence) => (
+                  <Box
+                    key={geofence.id}
+                    sx={{
+                      p: 2,
+                      border: "1px solid #ddd",
+                      borderRadius: 1,
+                      backgroundColor: "#fff",
+                      cursor: "pointer",
+                      transition: "all 0.2s ease",
+                      "&:hover": {
+                        backgroundColor: "#f0f0f0",
+                        borderColor: "#1976d2",
+                        transform: "translateY(-1px)",
+                        boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+                      },
+                    }}
+                    onClick={() => handleGeofenceClick(geofence)}
+                  >
+                    <Typography variant="body1" fontWeight="bold" gutterBottom>
+                      {geofence.name}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      gutterBottom
                     >
-                      View
-                    </Button>
-                    <Button
-                      size="small"
-                      color="error"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteGeofence(geofence.id);
-                      }}
+                      <strong>Trailer:</strong> {geofence.trailerNumber}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      gutterBottom
                     >
-                      Delete
-                    </Button>
+                      <strong>Type:</strong> {geofence.shape}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      gutterBottom
+                    >
+                      <strong>Group:</strong> {geofence.group}
+                    </Typography>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      gutterBottom
+                    >
+                      <strong>Location:</strong>{" "}
+                      {geofence.location.address ||
+                        `${geofence.location.lat}, ${geofence.location.lng}`}
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      display="block"
+                      gutterBottom
+                    >
+                      Created: {geofence.createdAt.toLocaleDateString()}
+                    </Typography>
+                    <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="primary"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleGeofenceView(geofence);
+                        }}
+                        sx={{ flex: 1 }}
+                      >
+                        View
+                      </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteGeofence(geofence.id);
+                        }}
+                        sx={{ flex: 1 }}
+                      >
+                        Delete
+                      </Button>
+                    </Box>
                   </Box>
-                </Box>
-              ))}
+                ))}
+              </Box>
+            </>
+          ) : (
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                textAlign: "center",
+                color: "text.secondary",
+              }}
+            >
+              <LocationOnIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+              <Typography variant="h6" gutterBottom>
+                No Geofences Created
+              </Typography>
+              <Typography variant="body2">
+                Click "Add Geofence" to create your first geofence
+              </Typography>
             </Box>
-          </Box>
-        )}
+          )}
+        </Box>
       </Box>
 
-      {/* Map Container */}
+      {/* Right Side - Map Container */}
       <Box sx={{ flex: 1, position: "relative" }}>
         <APIProvider apiKey={API_KEY}>
           <Map
             {...mapConfig}
-            onLoad={handleMapLoad}
             style={{ width: "100%", height: "100%" }}
             gestureHandling="greedy"
             disableDefaultUI={false}
