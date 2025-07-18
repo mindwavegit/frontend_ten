@@ -447,9 +447,9 @@ const Geofences = () => {
       setTimeout(() => {
         if (geofence.shapeObject) {
           geofence.shapeObject.setOptions({
-            fillColor: originalFillColor || "#FF0000",
-            strokeColor: originalStrokeColor || "#FF0000",
-            strokeWeight: originalStrokeWeight || 2,
+            fillColor: originalFillColor,
+            strokeColor: originalStrokeColor,
+            strokeWeight: originalStrokeWeight,
           });
         }
       }, 3000);
