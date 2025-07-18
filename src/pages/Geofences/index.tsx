@@ -11,9 +11,6 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  RadioGroup,
-  FormControlLabel,
-  Radio,
   FormLabel,
   IconButton,
 } from "@mui/material";
@@ -21,11 +18,8 @@ import {
   Add as AddIcon,
   Close as CloseIcon,
   LocationOn as LocationOnIcon,
-  MyLocation as MyLocationIcon,
 } from "@mui/icons-material";
-import { Easing, Tween, update } from "@tweenjs/tween.js";
 
-import TextInputField from "../../components/Form/TextField";
 import React, { useState, useCallback } from "react";
 import { APIProvider, Map, useMap } from "@vis.gl/react-google-maps";
 import { useDrawingManager } from "../../components/hooks/useDrawingManager";
@@ -35,7 +29,6 @@ const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 interface GeofenceData {
   id: string;
   name: string;
-  trailerNumber: string;
   location: {
     lat: number;
     lng: number;
@@ -45,12 +38,12 @@ interface GeofenceData {
   shapeObject: google.maps.Circle | google.maps.Polygon;
   group: string;
   createdAt: Date;
+  zoomLevel: number;
 }
 
 // Modal form data
 interface GeofenceFormData {
   name: string;
-  trailerNumber: string;
   location: {
     lat: number | "";
     lng: number | "";
@@ -76,6 +69,9 @@ const Geofences = () => {
   // State for storing saved geofences
   const [geofences, setGeofences] = useState<GeofenceData[]>([]);
 
+  // Ref to store map instance for getting zoom level
+  const mapRef = React.useRef<google.maps.Map | null>(null);
+
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentShape, setCurrentShape] = useState<{
@@ -86,7 +82,6 @@ const Geofences = () => {
   // Form state
   const [formData, setFormData] = useState<GeofenceFormData>({
     name: "",
-    trailerNumber: "",
     location: {
       lat: "",
       lng: "",
@@ -102,29 +97,39 @@ const Geofences = () => {
   >({});
 
   // Map configuration state
-  const [mapConfig, setMapConfig] = useState({
+  const mapConfig = {
     mapId: "49ae42fed52588c3",
     defaultCenter: { lat: 43.64, lng: -79.41 },
     defaultZoom: 4,
     gestureHandling: "greedy",
     disableDefaultUI: true,
-  });
+  };
 
   // Custom hook for drawing manager
   const MapWithDrawing = () => {
     const { drawingManager } = useDrawingManager();
     const map = useMap();
+
+    // Store map reference for getting zoom level
+    React.useEffect(() => {
+      if (map) {
+        mapRef.current = map;
+      }
+    }, [map]);
     // Handle animation when animationTarget changes
     React.useEffect(() => {
-      if (!animationTarget) return;
+      if (!animationTarget || !map) return;
 
       const { lat, lng, targetZoom } = animationTarget;
 
       // Animate camera with TWEEN by updating map config
       map.setCenter({ lat, lng });
+      if (targetZoom !== undefined) {
+        map.setZoom(targetZoom);
+      }
       // Clear the animation target after starting
       setAnimationTarget(null);
-    }, [animationTarget]);
+    }, [animationTarget, map]);
 
     // Handle new shapes being drawn
     React.useEffect(() => {
@@ -282,44 +287,6 @@ const Geofences = () => {
       }
     };
 
-  // Handle "Locate Me" button
-  const handleLocateMe = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-
-          setFormData((prev) => ({
-            ...prev,
-            location: {
-              lat,
-              lng,
-              address: prev.location.address,
-            },
-          }));
-
-          // Geocode the location
-          const geocoder = new google.maps.Geocoder();
-          geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-            if (status === "OK" && results && results[0]) {
-              setFormData((prev) => ({
-                ...prev,
-                location: {
-                  ...prev.location,
-                  address: results[0].formatted_address,
-                },
-              }));
-            }
-          });
-        },
-        (error) => {
-          console.error("Error getting location:", error);
-        }
-      );
-    }
-  };
-
   // Handle shape selection change
   const handleShapeChange = (event: React.ChangeEvent<{ value: unknown }>) => {
     const selectedShape = event.target.value as "circle" | "polygon";
@@ -337,10 +304,6 @@ const Geofences = () => {
 
     if (!formData.name.trim()) {
       newErrors.name = "Geofence name is required";
-    }
-
-    if (!formData.trailerNumber.trim()) {
-      newErrors.trailerNumber = "Trailer number is required";
     }
 
     if (formData.location.lat === "" || formData.location.lng === "") {
@@ -392,10 +355,13 @@ const Geofences = () => {
       return;
     }
 
+    // Get current zoom level
+    const currentZoom = mapRef.current?.getZoom() || 10;
+
+    // Create new geofence
     const newGeofence: GeofenceData = {
       id: Date.now().toString(),
       name: formData.name.trim(),
-      trailerNumber: formData.trailerNumber.trim(),
       location: {
         lat: formData.location.lat as number,
         lng: formData.location.lng as number,
@@ -405,6 +371,7 @@ const Geofences = () => {
       shapeObject,
       group: formData.group,
       createdAt: new Date(),
+      zoomLevel: currentZoom,
     };
 
     setGeofences((prev) => [...prev, newGeofence]);
@@ -417,7 +384,6 @@ const Geofences = () => {
     setCurrentShape(null);
     setFormData({
       name: "",
-      trailerNumber: "",
       location: {
         lat: "",
         lng: "",
@@ -450,49 +416,19 @@ const Geofences = () => {
     });
   };
 
-  // Handle geolocation
-  const handleGeolocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-
-          // Update map configuration for future renders
-          setMapConfig((prev) => ({
-            ...prev,
-            defaultCenter: { lat, lng },
-            defaultZoom: 15,
-          }));
-
-          console.log("Geolocation successful");
-        },
-        (error) => {
-          console.error("Error getting location:", error);
-          alert(
-            "Unable to retrieve your location. Please check your browser settings."
-          );
-        }
-      );
-    } else {
-      alert("Geolocation is not supported by this browser.");
-    }
-  };
-
   // State for animation trigger
   const [animationTarget, setAnimationTarget] = useState<{
     lat: number;
     lng: number;
-    targetZoom: number;
+    targetZoom?: number;
   } | null>(null);
 
   // Handle geofence view/navigation
   const handleGeofenceView = (geofence: GeofenceData) => {
     const { lat, lng } = geofence.location;
-    const targetZoom = geofence.shape === "circle" ? 15 : 14;
 
-    // Trigger animation by setting the target
-    setAnimationTarget({ lat, lng, targetZoom });
+    // Trigger animation by setting the target - use stored zoom level
+    setAnimationTarget({ lat, lng, targetZoom: geofence.zoomLevel });
 
     // Highlight the geofence shape temporarily
     if (geofence.shapeObject) {
@@ -589,13 +525,6 @@ const Geofences = () => {
                   >
                     <Typography variant="body1" fontWeight="bold" gutterBottom>
                       {geofence.name}
-                    </Typography>
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      gutterBottom
-                    >
-                      <strong>Trailer:</strong> {geofence.trailerNumber}
                     </Typography>
                     <Typography
                       variant="body2"
@@ -717,19 +646,6 @@ const Geofences = () => {
         </DialogTitle>
         <DialogContent>
           <Box sx={{ pt: 1 }}>
-            {/* Trailer Number */}
-            <TextField
-              fullWidth
-              label="Trailer Number"
-              value={formData.trailerNumber}
-              onChange={handleInputChange("trailerNumber")}
-              error={!!errors.trailerNumber}
-              helperText={errors.trailerNumber}
-              margin="normal"
-              placeholder="Enter Trailer Number"
-              required
-            />
-
             {/* Geofence Name */}
             <TextField
               fullWidth
