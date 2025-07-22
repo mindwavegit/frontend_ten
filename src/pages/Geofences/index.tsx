@@ -23,6 +23,8 @@ import {
 import React, { useState, useCallback } from "react";
 import { APIProvider, Map, useMap } from "@vis.gl/react-google-maps";
 import { useDrawingManager } from "../../components/hooks/useDrawingManager";
+import { AutocompleteCustom } from "../../components/AutoComplete";
+import AutoCompleteResult from "../../components/AutoCompleteResult";
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
 // Define the geofence data structure
@@ -68,6 +70,8 @@ const PREDEFINED_GROUPS = [
 const Geofences = () => {
   // State for storing saved geofences
   const [geofences, setGeofences] = useState<GeofenceData[]>([]);
+  const [selectedPlace, setSelectedPlace] =
+    useState<google.maps.places.Place | null>(null);
 
   // Ref to store map instance for getting zoom level
   const mapRef = React.useRef<google.maps.Map | null>(null);
@@ -468,6 +472,10 @@ const Geofences = () => {
     handleGeofenceView(geofence);
   };
 
+  const handlePlaceSelect = (place: google.maps.places.Place | null) => {
+    setSelectedPlace(place);
+  };
+
   return (
     <div style={{ height: "100vh", display: "flex" }}>
       {/* Left Sidebar - Geofences List */}
@@ -619,6 +627,8 @@ const Geofences = () => {
             gestureHandling="greedy"
             disableDefaultUI={false}
           >
+            <AutocompleteCustom onPlaceSelect={handlePlaceSelect} />
+            <AutoCompleteResult place={selectedPlace} />
             <MapWithDrawing />
           </Map>
         </APIProvider>
