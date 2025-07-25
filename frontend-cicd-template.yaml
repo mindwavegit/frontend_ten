@@ -1,0 +1,524 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for frontend CI/CD pipeline with ECR, EKS, and Fargate'
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Description: GitHub repository owner
+  
+  GitHubRepo:
+    Type: String
+    Default: ten_dev
+    Description: GitHub repository name
+  
+  GitHubBranch:
+    Type: String
+    Default: dev
+    Description: GitHub repository branch
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub OAuth token
+  
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for resources
+  
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of subnet IDs for resources
+  
+  SecretsManagerPrefix:
+    Type: String
+    Default: ten-app
+    Description: Prefix for Secrets Manager secrets
+    
+  KubernetesVersion:
+    Type: String
+    Default: '1.27'
+    Description: Kubernetes version for the EKS cluster
+    
+  ClusterName:
+    Type: String
+    Default: 'ten-app-cluster'
+    Description: Name of the EKS cluster
+    
+  FargateProfileRoleArn:
+    Type: String
+    Description: ARN of the Fargate Profile Role
+
+Resources:
+  # ECR Repository for Frontend
+  FrontendECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub ${AWS::StackName}-frontend-repo
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 20 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 20
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # Reference to existing secrets in Secrets Manager
+  FrontendSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${SecretsManagerPrefix}/frontend-env
+      Description: Secret for the frontend environment variables
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonECR-FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy'
+      Policies:
+        - PolicyName: CodeBuildServiceRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'eks:DescribeCluster'
+                  - 'eks:ListClusters'
+                  - 'eks:UpdateClusterConfig'
+                  - 'eks:DescribeUpdate'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref FrontendSecrets
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:GetObjectVersion'
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+
+  # CodePipeline Service Role
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess'
+      Policies:
+        - PolicyName: CodePipelineServiceRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:PutObject'
+                Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+              - Effect: Allow
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+
+  # S3 Bucket for Artifacts
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # S3 Bucket Policy
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: 
+                - !GetAtt CodeBuildServiceRole.Arn
+                - !GetAtt CodePipelineServiceRole.Arn
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:GetObjectVersion'
+            Resource: !Sub 'arn:aws:s3:::${ArtifactBucket}/*'
+
+  # CodeBuild Project for Frontend Build
+  FrontendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-frontend-build
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FrontendECRRepository}
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: FRONTEND_SECRETS_ARN
+            Value: !Ref FrontendSecrets
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 18
+              commands:
+                - echo Installing dependencies...
+                - npm install
+                
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG=${COMMIT_HASH:=latest}
+                - echo Retrieving environment variables from Secrets Manager...
+                - SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id $FRONTEND_SECRETS_ARN --query SecretString --output text)
+                - echo "Creating .env.production file with secrets..."
+                - echo "VITE_API_ENDPOINT=$(echo $SECRET_JSON | jq -r '.VITE_API_ENDPOINT')" > .env.production
+                - echo "VITE_GOOGLE_MAPS_API_KEY=$(echo $SECRET_JSON | jq -r '.VITE_GOOGLE_MAPS_API_KEY')" >> .env.production
+                - echo "Environment variables set successfully"
+            
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the React application...
+                - npm run build
+                - echo Building the Docker image...
+                - |
+                  cat > Dockerfile << 'EOL'
+                  FROM nginx:alpine
+                  COPY dist /usr/share/nginx/html
+                  COPY nginx.conf /etc/nginx/conf.d/default.conf
+                  EXPOSE 80
+                  CMD ["nginx", "-g", "daemon off;"]
+                  EOL
+                - |
+                  cat > nginx.conf << 'EOL'
+                  server {
+                    listen 80;
+                    server_name _;
+                    root /usr/share/nginx/html;
+                    index index.html;
+                    
+                    # Handle SPA routing
+                    location / {
+                      try_files $uri $uri/ /index.html;
+                    }
+                    
+                    # Cache static assets
+                    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+                      expires 30d;
+                      add_header Cache-Control "public, no-transform";
+                    }
+                    
+                    # Health check for Kubernetes
+                    location /health {
+                      access_log off;
+                      return 200 "healthy\n";
+                    }
+                  }
+                  EOL
+                - docker build -t $ECR_REPOSITORY_URI:$IMAGE_TAG .
+                - docker tag $ECR_REPOSITORY_URI:$IMAGE_TAG $ECR_REPOSITORY_URI:latest
+            
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+                - docker push $ECR_REPOSITORY_URI:latest
+                - echo Creating Kubernetes deployment file...
+                - |
+                  cat > frontend-deployment.yaml << EOL
+                  apiVersion: apps/v1
+                  kind: Deployment
+                  metadata:
+                    name: ten-frontend
+                    labels:
+                      app: ten-frontend
+                  spec:
+                    replicas: 2
+                    selector:
+                      matchLabels:
+                        app: ten-frontend
+                    template:
+                      metadata:
+                        labels:
+                          app: ten-frontend
+                      spec:
+                        containers:
+                        - name: ten-frontend
+                          image: ${ECR_REPOSITORY_URI}:${IMAGE_TAG}
+                          ports:
+                          - containerPort: 80
+                          resources:
+                            limits:
+                              cpu: "0.5"
+                              memory: "512Mi"
+                            requests:
+                              cpu: "0.2"
+                              memory: "256Mi"
+                          readinessProbe:
+                            httpGet:
+                              path: /health
+                              port: 80
+                            initialDelaySeconds: 10
+                            periodSeconds: 5
+                          livenessProbe:
+                            httpGet:
+                              path: /health
+                              port: 80
+                            initialDelaySeconds: 15
+                            periodSeconds: 10
+                  ---
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: ten-frontend-service
+                  spec:
+                    selector:
+                      app: ten-frontend
+                    ports:
+                    - port: 80
+                      targetPort: 80
+                    type: ClusterIP
+                  ---
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: ten-frontend-ingress
+                    annotations:
+                      kubernetes.io/ingress.class: alb
+                      alb.ingress.kubernetes.io/scheme: internet-facing
+                      alb.ingress.kubernetes.io/target-type: ip
+                  spec:
+                    rules:
+                    - http:
+                        paths:
+                        - path: /
+                          pathType: Prefix
+                          backend:
+                            service:
+                              name: ten-frontend-service
+                              port:
+                                number: 80
+                  EOL
+                - echo "{\"ImageURI\":\"$ECR_REPOSITORY_URI:$IMAGE_TAG\"}" > imageDefinitions.json
+          
+          artifacts:
+            files:
+              - frontend-deployment.yaml
+              - imageDefinitions.json
+              - k8s-frontend-deployment.yaml
+          
+          cache:
+            paths:
+              - 'node_modules/**/*'
+
+  # CodeBuild Project for Frontend Deploy
+  FrontendDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-frontend-deploy
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FrontendECRRepository}
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref ClusterName
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.9
+              commands:
+                - echo Installing kubectl...
+                - curl -LO "https://dl.k8s.io/release/stable.txt"
+                - curl -LO "https://dl.k8s.io/$(cat stable.txt)/bin/linux/amd64/kubectl"
+                - chmod +x kubectl
+                - mv kubectl /usr/local/bin/
+                - echo Installing AWS CLI...
+                - pip install --upgrade awscli
+                
+            pre_build:
+              commands:
+                - echo Configuring kubectl...
+                - aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_DEFAULT_REGION
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG=${COMMIT_HASH:=latest}
+                
+            build:
+              commands:
+                - echo Deployment started on `date`
+                - echo Deploying to EKS...
+                - kubectl apply -f k8s-frontend-deployment.yaml
+                - echo Waiting for deployment to complete...
+                - kubectl rollout status deployment/ten-frontend --timeout=300s
+                
+            post_build:
+              commands:
+                - echo Deployment completed on `date`
+                - echo Cleaning up old resources...
+                - |
+                  # Get all deployments in the namespace with the frontend label
+                  DEPLOYMENTS=$(kubectl get deployments -n default -l app=ten-frontend -o jsonpath='{.items[*].metadata.name}')
+                  # Loop through deployments and delete those not matching our current app
+                  for DEPLOYMENT in $DEPLOYMENTS; do
+                    if [[ "$DEPLOYMENT" != "ten-frontend" ]]; then
+                      echo "Deleting old deployment: $DEPLOYMENT"
+                      kubectl delete deployment $DEPLOYMENT -n default
+                    fi
+                  done
+                - echo Verifying deployment...
+                - kubectl get pods -l app=ten-frontend
+                - kubectl get services ten-frontend-service
+                - kubectl get ingress ten-frontend-ingress
+          
+          artifacts:
+            files:
+              - k8s-frontend-deployment.yaml
+
+  # CodePipeline for Frontend
+  FrontendPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${AWS::StackName}-frontend-pipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: SourceCode
+        
+        - Name: Build
+          Actions:
+            - Name: BuildFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref FrontendBuildProject
+              InputArtifacts:
+                - Name: SourceCode
+              OutputArtifacts:
+                - Name: BuildOutput
+        
+        - Name: Deploy
+          Actions:
+            - Name: DeployToEKS
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref FrontendDeployProject
+              InputArtifacts:
+                - Name: BuildOutput
+
+  # Fargate Profile for Frontend
+  FrontendFargateProfile:
+    Type: AWS::EKS::FargateProfile
+    Properties:
+      ClusterName: !Ref ClusterName
+      FargateProfileName: !Sub ${AWS::StackName}-frontend-fargate-profile
+      PodExecutionRoleArn: !Ref FargateProfileRoleArn
+      Subnets: !Ref SubnetIds
+      Selectors:
+        - Namespace: default
+          Labels:
+            app: ten-frontend
+
+Outputs:
+  PipelineUrl:
+    Description: URL to the CodePipeline console
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${FrontendPipeline}
+  
+  EcrRepositoryUri:
+    Description: URI of the ECR repository
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${FrontendECRRepository}
+  
+  FrontendServiceUrl:
+    Description: URL to access the frontend service
+    Value: !Sub http://ten-frontend-ingress-${AWS::Region}.elb.amazonaws.com

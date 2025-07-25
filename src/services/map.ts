@@ -8,7 +8,7 @@ const mapService = createApi({
   endpoints: (builder) => ({
     getRouteInformation: builder.query({
       query: ({ page, limit, searchParams }) => ({
-        url: `/auth/getTrips?page=${page}&limit=${limit}&${getParams(
+        url: `/api/auth/getTrips?page=${page}&limit=${limit}&${getParams(
           searchParams
         )}`,
       }),
