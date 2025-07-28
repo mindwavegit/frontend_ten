@@ -16,18 +16,14 @@ Parameters:
     Default: dev
     Description: GitHub repository branch
   
-  GitHubToken:
+  GitHubConnectionArn:
     Type: String
-    NoEcho: true
-    Description: GitHub OAuth token
+    Description: ARN of the GitHub App connection
   
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: VPC ID for resources
-  
-  SubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: List of subnet IDs for resources
+  InfrastructureStackName:
+    Type: String
+    Default: ten-app-infrastructure
+    Description: Name of the infrastructure stack
   
   SecretsManagerPrefix:
     Type: String
@@ -44,9 +40,7 @@ Parameters:
     Default: 'ten-app-cluster'
     Description: Name of the EKS cluster
     
-  FargateProfileRoleArn:
-    Type: String
-    Description: ARN of the Fargate Profile Role
+
 
 Resources:
   # ECR Repository for Frontend
@@ -75,12 +69,7 @@ Resources:
             ]
           }
 
-  # Reference to existing secrets in Secrets Manager
-  FrontendSecrets:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub ${SecretsManagerPrefix}/frontend-env
-      Description: Secret for the frontend environment variables
+
 
   # CodeBuild Service Role
   CodeBuildServiceRole:
@@ -94,7 +83,7 @@ Resources:
               Service: codebuild.amazonaws.com
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/AmazonECR-FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess'
         - 'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy'
       Policies:
         - PolicyName: CodeBuildServiceRolePolicy
@@ -117,7 +106,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - 'secretsmanager:GetSecretValue'
-                Resource: !Ref FrontendSecrets
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretsManagerPrefix}/frontend-env-*
               - Effect: Allow
                 Action:
                   - 's3:GetObject'
@@ -153,6 +142,13 @@ Resources:
                 Action:
                   - 'codebuild:BatchGetBuilds'
                   - 'codebuild:StartBuild'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'codepipeline:CreateWebhook'
+                  - 'codepipeline:RegisterWebhookWithThirdParty'
+                  - 'codepipeline:DeregisterWebhookWithThirdParty'
+                  - 'codepipeline:DeleteWebhook'
                 Resource: '*'
 
   # S3 Bucket for Artifacts
@@ -205,7 +201,7 @@ Resources:
           - Name: AWS_DEFAULT_REGION
             Value: !Ref AWS::Region
           - Name: FRONTEND_SECRETS_ARN
-            Value: !Ref FrontendSecrets
+            Value: !Sub ${SecretsManagerPrefix}/frontend-env
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -415,6 +411,8 @@ Resources:
             build:
               commands:
                 - echo Deployment started on `date`
+                - echo Checking if ALB controller is ready...
+                - kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=aws-load-balancer-controller -n kube-system --timeout=300s
                 - echo Deploying to EKS...
                 - kubectl apply -f k8s-frontend-deployment.yaml
                 - echo Waiting for deployment to complete...
@@ -458,14 +456,13 @@ Resources:
             - Name: Source
               ActionTypeId:
                 Category: Source
-                Owner: ThirdParty
-                Provider: GitHub
+                Owner: AWS
+                Provider: CodeStarSourceConnection
                 Version: '1'
               Configuration:
-                Owner: !Ref GitHubOwner
-                Repo: !Ref GitHubRepo
-                Branch: !Ref GitHubBranch
-                OAuthToken: !Ref GitHubToken
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub ${GitHubOwner}/${GitHubRepo}
+                BranchName: !Ref GitHubBranch
               OutputArtifacts:
                 - Name: SourceCode
         
@@ -498,17 +495,7 @@ Resources:
                 - Name: BuildOutput
 
   # Fargate Profile for Frontend
-  FrontendFargateProfile:
-    Type: AWS::EKS::FargateProfile
-    Properties:
-      ClusterName: !Ref ClusterName
-      FargateProfileName: !Sub ${AWS::StackName}-frontend-fargate-profile
-      PodExecutionRoleArn: !Ref FargateProfileRoleArn
-      Subnets: !Ref SubnetIds
-      Selectors:
-        - Namespace: default
-          Labels:
-            app: ten-frontend
+
 
 Outputs:
   PipelineUrl:
